@@ -70,8 +70,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
         
         gt_image = viewpoint_cam.original_image.cuda()
-        Ll1 = l1_loss(image, gt_image)
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+        # v6.12: soft mask loss
+        if viewpoint_cam.gt_alpha_mask is not None:
+            alpha_mask = viewpoint_cam.gt_alpha_mask.cuda()    # [1,H,W] 0=bg, 1=fg
+            bg_weight = 0.01
+            weight = alpha_mask + (1.0 - alpha_mask) * bg_weight  # fg=1.0, bg=bg_weight
+            # Weighted L1
+            Ll1 = (torch.abs(image - gt_image) * weight).mean()
+            # Weighted SSIM
+            loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image * weight, gt_image * weight))
+        else:
+            Ll1 = l1_loss(image, gt_image)
+            loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
         
         # regularization
         lambda_normal = opt.lambda_normal if iteration > 7000 else 0.0
@@ -81,8 +91,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         rend_normal  = render_pkg['rend_normal']
         surf_normal = render_pkg['surf_normal']
         normal_error = (1 - (rend_normal * surf_normal).sum(dim=0))[None]
-        normal_loss = lambda_normal * (normal_error).mean()
-        dist_loss = lambda_dist * (rend_dist).mean()
+        # v6.12: masked regularization
+        if viewpoint_cam.gt_alpha_mask is not None:
+            _m = viewpoint_cam.gt_alpha_mask.cuda()
+            _fg_count = _m.sum().clamp(min=1)
+            normal_loss = lambda_normal * (normal_error * _m).sum() / _fg_count
+            dist_loss = lambda_dist * (rend_dist * _m).sum() / _fg_count
+        else:
+            normal_loss = lambda_normal * (normal_error).mean()
+            dist_loss = lambda_dist * (rend_dist).mean()
 
         # loss
         total_loss = loss + dist_loss + normal_loss

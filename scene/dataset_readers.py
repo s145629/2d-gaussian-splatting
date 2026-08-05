@@ -202,12 +202,13 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
             image = Image.open(image_path)
 
             im_data = np.array(image.convert("RGBA"))
-
+            # v6.12: composite RGB with bg + keep alpha as RGBA
             bg = np.array([1,1,1]) if white_background else np.array([0, 0, 0])
-
             norm_data = im_data / 255.0
-            arr = norm_data[:,:,:3] * norm_data[:, :, 3:4] + bg * (1 - norm_data[:, :, 3:4])
-            image = Image.fromarray(np.array(arr*255.0, dtype=np.uint8), "RGB")
+            composited_rgb = norm_data[:,:,:3] * norm_data[:,:,3:4] + bg * (1 - norm_data[:,:,3:4])
+            composited_rgb_u8 = np.clip(composited_rgb * 255.0, 0, 255).astype(np.uint8)
+            rgba_out = np.concatenate([composited_rgb_u8, im_data[:,:,3:4]], axis=2)
+            image = Image.fromarray(rgba_out, "RGBA")
 
             fovy = focal2fov(fov2focal(fovx, image.size[0]), image.size[1])
             FovY = fovy 
