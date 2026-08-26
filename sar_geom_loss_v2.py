@@ -390,6 +390,8 @@ class SarGeometryLoss:
         pointer = {
             "schema_version": "um_gsf_sar_geom_unfreeze_latest_v2",
             "mode": "hybrid_joint",
+            "exp": str(getattr(self.args, "sar_experiment_name", "hybrid")),
+            "steps": int(iteration),
             "updated_at": __import__("datetime").datetime.now().astimezone().isoformat(timespec="seconds"),
             "unfreeze_out_dir": str(_host_display_path(model_path, self.container_workspace, self.host_workspace)),
             "manifest_path": str(manifest_host),

@@ -117,6 +117,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         sar_ramp = 0.0
         sar_lambda_range = 0.0
         sar_lambda_fp = 0.0
+        sar_active = False
         if sar_geometry is not None:
             sar_warmup = int(sar_args.sar_warmup_iters)
             sar_every = max(1, int(sar_args.sar_every))
@@ -124,9 +125,42 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             sar_lambda_range = sar_ramp * float(sar_args.lambda_sar_range)
             sar_lambda_fp = sar_ramp * float(sar_args.lambda_sar_fp)
             if iteration >= sar_warmup and iteration % sar_every == 0:
+                sar_active = True
                 sar_total, sar_range_loss, sar_footprint_loss, _sar_diags = sar_geometry.compute(
                     gaussians, iteration
                 )
+
+        if (
+            sar_geometry is not None
+            and getattr(sar_args, "sar_debug_grad", False)
+            and iteration % max(1, int(getattr(sar_args, "sar_debug_interval", 10))) == 0
+        ):
+            if sar_active and sar_total.requires_grad:
+                sar_grads = torch.autograd.grad(
+                    sar_total,
+                    (gaussians._xyz, gaussians._rotation, gaussians._scaling),
+                    retain_graph=True,
+                    allow_unused=True,
+                )
+            else:
+                sar_grads = (None, None, None)
+
+            def _norm_or_zero(value):
+                return 0.0 if value is None else float(value.detach().norm().item())
+
+            print(
+                "[SAR-GRAD] iter={:05d} active={} points={} xyz={:.6e} "
+                "rotation={:.6e} scaling={:.6e}".format(
+                    iteration,
+                    sar_active,
+                    gaussians._xyz.shape[0],
+                    _norm_or_zero(sar_grads[0]),
+                    _norm_or_zero(sar_grads[1]),
+                    _norm_or_zero(sar_grads[2]),
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
 
         # loss
         total_loss = loss + dist_loss + normal_loss + sar_total
@@ -146,12 +180,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 sar_range_component = sar_lambda_range * sar_range_loss.item()
                 sar_fp_component = sar_lambda_fp * sar_footprint_loss.item()
                 print(
-                    "[SAR] iter={:05d} total={:.6f} rgb={:.6f} sar_range={:.6f} "
+                    "[SAR] iter={:05d} joint_loss={:.6f} rgb_loss={:.6f} "
+                    "sar_loss={:.6f} sar_range={:.6f} "
                     "sar_fp={:.6f} lambda_range(t)={:.6g} lambda_fp(t)={:.6g} "
                     "ramp={:.4f} every={} ".format(
                         iteration,
                         total_loss.item(),
                         loss.item(),
+                        sar_total.item(),
                         sar_range_component,
                         sar_fp_component,
                         sar_lambda_range,
@@ -159,6 +195,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         sar_ramp,
                         max(1, int(sar_args.sar_every)),
                     ),
+                    file=sys.stderr,
                     flush=True,
                 )
 
@@ -333,6 +370,7 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     parser.add_argument("--sar_joint", action="store_true", default=False)
+    parser.add_argument("--sar_experiment_name", type=str, default="hybrid")
     parser.add_argument("--lambda_sar_range", type=float, default=0.0)
     parser.add_argument("--lambda_sar_fp", type=float, default=0.0)
     parser.add_argument("--lambda_sar_int_geom", type=float, default=0.0)
@@ -361,6 +399,8 @@ if __name__ == "__main__":
     parser.add_argument("--sar_tau_range", type=float, default=0.3)
     parser.add_argument("--sar_alpha", type=float, default=1.0)
     parser.add_argument("--sar_window_margin_m", type=float, default=2.0)
+    parser.add_argument("--sar_debug_grad", action="store_true", default=False)
+    parser.add_argument("--sar_debug_interval", type=int, default=10)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
     
